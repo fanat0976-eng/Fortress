@@ -1,9 +1,11 @@
 """Fortress Eye — standalone launcher with live video."""
 
-import asyncio
+import threading
+import time
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import scrolledtext
 from datetime import datetime
+
 from PIL import Image, ImageTk
 
 
@@ -18,8 +20,9 @@ class EyeWindow:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._running = False
-        self._daemon_task = None
-        self._cam_images = [None] * 4  # Keep references to prevent GC
+        self._thread = None
+        self._cam_caps = {}
+        self._cam_images = [None] * 4
 
         self._setup_ui()
 
@@ -35,7 +38,7 @@ class EyeWindow:
                                        font=("Segoe UI", 10))
         self._status_label.pack(side=tk.RIGHT, padx=15)
 
-        # Cameras grid
+        # Cameras grid — canvases for live video
         cam_frame = tk.Frame(self.root, bg="#0a0a0f")
         cam_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
@@ -87,7 +90,8 @@ class EyeWindow:
         self._stop_btn.config(state=tk.NORMAL)
         self._status_label.config(text="Running", fg="#00ff88")
         self._log_msg("Eye started — scanning cameras...")
-        self._daemon_task = asyncio.ensure_future(self._capture_loop())
+        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._thread.start()
 
     def _stop(self):
         self._running = False
@@ -95,19 +99,19 @@ class EyeWindow:
         self._stop_btn.config(state=tk.DISABLED)
         self._status_label.config(text="Stopped", fg="#666")
         self._log_msg("Eye stopped")
-        if self._daemon_task:
-            self._daemon_task.cancel()
+        for idx, cap in self._cam_caps.items():
+            cap.release()
+        self._cam_caps.clear()
 
-    async def _capture_loop(self):
-        """Capture from all available cameras and display in canvas."""
+    def _capture_loop(self):
+        """Capture from cameras in background thread."""
         try:
             import cv2
-            import numpy as np
         except ImportError:
-            self._log_msg("ERROR: opencv-python not installed")
+            self.root.after(0, lambda: self._log_msg("ERROR: opencv-python not installed"))
             return
 
-        # Find available cameras
+        # Find cameras
         cameras = []
         for i in range(4):
             cap = cv2.VideoCapture(i)
@@ -115,46 +119,43 @@ class EyeWindow:
                 w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                 h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                 cameras.append((i, cap, w, h))
-                self._log_msg(f"Camera {i}: {w}x{h}")
+                self._cam_caps[i] = cap
+                self.root.after(0, lambda idx=i, wi=w, hi=h: self._log_msg(f"Camera {idx}: {wi}x{hi}"))
             else:
                 cap.release()
 
         if not cameras:
-            self._log_msg("No cameras found")
-            self._cam_canvases[0].create_text(160, 90, text="No cameras detected", fill="#ff4444",
-                                               font=("Segoe UI", 11), tags="error")
+            self.root.after(0, lambda: self._log_msg("No cameras found"))
             return
 
-        self._log_msg(f"Found {len(cameras)} camera(s)")
+        self.root.after(0, lambda: self._log_msg(f"Found {len(cameras)} camera(s)"))
 
         # Load YOLO
         yolo = None
         try:
             from fortress.plugins.yolo_detector import YOLODetector
             yolo = YOLODetector("yolov8n.pt", 0.5)
-            await asyncio.to_thread(yolo.load)
+            yolo.load()
             if yolo.available:
-                self._log_msg("YOLO ready")
-        except Exception:
-            pass
+                self.root.after(0, lambda: self._log_msg("YOLO ready"))
+        except Exception as e:
+            self.root.after(0, lambda: self._log_msg(f"YOLO not available: {e}"))
 
+        # Capture loop
         try:
             while self._running:
-                for cam_idx, (cam_id, cap, w, h) in enumerate(cameras):
-                    if cam_idx >= 4:
+                for cam_idx, cap, w, h in cameras:
+                    if not self._running:
                         break
 
-                    ret, frame = await asyncio.to_thread(cap.read)
+                    ret, frame = cap.read()
                     if not ret:
                         continue
 
                     # YOLO detection
                     detections = []
                     if yolo and yolo.available:
-                        detections = await asyncio.to_thread(yolo.detect, frame)
-                        if detections:
-                            for d in detections:
-                                self._log_msg(f"Cam{cam_idx}: {d['class_name']} ({d['confidence']:.0%})")
+                        detections = yolo.detect(frame)
 
                     # Draw bounding boxes
                     for d in detections:
@@ -165,38 +166,53 @@ class EyeWindow:
                         label = f"{d['class_name']} {d['confidence']:.0%}"
                         cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-                    # Resize for display
+                    # Log detections
+                    if detections:
+                        for d in detections:
+                            self.root.after(0, lambda n=d['class_name'], c=d['confidence']:
+                                self._log_msg(f"Cam{cam_idx}: {n} ({c:.0%})"))
+
+                    # Convert frame to PhotoImage
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    img = Image.fromarray(frame_rgb)
+
+                    # Resize to fit canvas
                     canvas = self._cam_canvases[cam_idx]
-                    cw = max(canvas.winfo_width(), 200)
-                    ch = max(canvas.winfo_height(), 150)
+                    cw = canvas.winfo_width()
+                    ch = canvas.winfo_height()
+                    if cw < 10 or ch < 10:
+                        cw, ch = 400, 300
+
                     scale = min(cw / w, ch / h)
                     new_w, new_h = int(w * scale), int(h * scale)
-                    frame_resized = cv2.resize(frame, (new_w, new_h))
-
-                    # Convert to PhotoImage
-                    frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-                    img = Image.fromarray(frame_rgb)
+                    img = img.resize((new_w, new_h), Image.LANCZOS)
                     photo = ImageTk.PhotoImage(img)
 
-                    # Update canvas
-                    canvas.delete("all")
-                    canvas.create_image(cw // 2, ch // 2, image=photo, anchor=tk.CENTER)
-                    self._cam_images[cam_idx] = photo  # Prevent GC
+                    # Update canvas on main thread
+                    def update_canvas(c=canvas, p=photo, cw=cw, ch=ch, idx=cam_idx, det=len(detections)):
+                        c.delete("all")
+                        c.create_image(cw // 2, ch // 2, image=p, anchor=tk.CENTER)
+                        self._cam_images[idx] = p
+                        # Draw status overlay
+                        color = "#00ff88" if det > 0 else "#666"
+                        text = f"{det} objects" if det > 0 else "Live"
+                        c.create_text(10, ch - 10, text=text, fill=color, anchor=tk.SW, font=("Segoe UI", 9))
 
-                await asyncio.sleep(0.1)  # ~10 FPS
+                    self.root.after(0, update_canvas)
 
-        except asyncio.CancelledError:
-            pass
+                time.sleep(0.1)  # ~10 FPS
+
         except Exception as e:
-            self._log_msg(f"Error: {e}")
+            self.root.after(0, lambda: self._log_msg(f"Error: {e}"))
         finally:
-            for _, cap, _, _ in cameras:
+            for idx, cap in self._cam_caps.items():
                 cap.release()
+            self._cam_caps.clear()
 
     def _on_close(self):
         self._running = False
-        if self._daemon_task:
-            self._daemon_task.cancel()
+        for idx, cap in self._cam_caps.items():
+            cap.release()
         self.root.destroy()
 
     def run(self):
