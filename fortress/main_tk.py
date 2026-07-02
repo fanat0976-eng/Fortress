@@ -137,7 +137,8 @@ class OrchestratorWindow:
         ts = datetime.now().strftime("%H:%M:%S")
         self._log.insert(tk.END, f"[{ts}] {msg}\n")
         self._log.see(tk.END)
-        if self._log.index(tk.END).split(".")[0] > 200:
+        lines = int(self._log.index(tk.END).split(".")[0])
+        if lines > 200:
             self._log.delete("1.0", "50.0")
 
     def _scan_system(self):
