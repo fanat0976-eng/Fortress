@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fortress"
+version = "0.1.0"
+description = "Event-driven autonomous AI daemon — 24/7 фоновый агент"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Fortress Team" }]
+dependencies = [
+    "httpx>=0.27.0",
+    "aiosqlite>=0.20.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.8.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+plugins = [
+    "watchdog>=6.0.0",
+    "psutil>=6.0.0",
+    "paho-mqtt>=2.0.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+fortress = "fortress.main:main"
+
+[tool.setuptools.packages.find]
+include = ["fortress", "fortress.*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

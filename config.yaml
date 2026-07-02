@@ -1,0 +1,105 @@
+fortress:
+  name: "Fortress V2"
+  dry_run: false
+
+  llm:
+    fast_model: "gemma2:2b"
+    deep_model: "qwen2.5:14b"
+    ollama_url: "http://127.0.0.1:11434"
+    fast_timeout: 5
+    deep_timeout: 30
+    max_tokens: 500
+
+  event_bus:
+    dedup_window: 5.0
+    max_rate: 10.0
+
+  rules:
+    - name: "PDF → Log"
+      event: "file.created"
+      condition: "payload.get('path', '').endswith('.pdf')"
+      action:
+        type: "log"
+        message: "PDF detected"
+      enabled: true
+    - name: "Camera Motion → Log"
+      event: "camera.motion"
+      action:
+        type: "log"
+        message: "Motion detected"
+      enabled: true
+    - name: "Camera AI Analysis → Log"
+      event: "camera.analysis"
+      action:
+        type: "log"
+        message: "AI analysis complete"
+      enabled: true
+    - name: "Camera Detection → Log"
+      event: "camera.detection"
+      action:
+        type: "log"
+        message: "Object detected"
+      enabled: true
+
+  plugins:
+    file_watcher:
+      enabled: false
+      paths:
+        - "C:\\Users\\badge\\Desktop"
+        - "C:\\Users\\badge\\Downloads"
+    process_monitor:
+      enabled: true
+      cpu_threshold: 80
+      ram_threshold: 80
+    network_monitor:
+      enabled: false
+    mqtt:
+      enabled: false
+      mqtt_broker: "127.0.0.1"
+      mqtt_port: 1883
+    home_assistant:
+      enabled: false
+      ha_url: "http://192.168.1.100:8123"
+      ha_token: ""
+    camera:
+      enabled: true
+      motion_threshold: 5000
+      frame_interval: 1.0
+      yolo_model: "yolov8n.pt"
+      yolo_confidence: 0.5
+      ai_model: "llava"
+      rtsp_urls: []
+      # Add RTSP cameras here:
+      # - "rtsp://192.168.1.100:554/stream1"
+      # - "rtsp://admin:password@192.168.1.101:554/cam/realmonitor?channel=1&subtype=0"
+    telegram:
+      enabled: false
+      bot_token: ""
+      chat_id: ""
+    email_monitor:
+      enabled: false
+      imap_server: "imap.gmail.com"
+      imap_port: 993
+      imap_email: ""
+      imap_password: ""
+      imap_ssl: true
+      check_interval: 60
+      important_senders: []
+
+  notifications:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+
+  security:
+    destructive_approval: true
+    allowed_paths:
+      - "C:\\Users\\badge\\Desktop"
+      - "C:\\Users\\badge\\Documents"
+
+  database:
+    path: "~/.fortress/data/fortress.db"
+
+  web:
+    host: "127.0.0.1"
+    port: 8090
